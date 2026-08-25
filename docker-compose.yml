@@ -1,0 +1,111 @@
+# Self-hosted stack for Recon's backend — everything on one machine (built
+# for Oracle Cloud's "Always Free" Ampere VM, but runs on any Docker host).
+#
+# Unlike the render.yaml topology, the API and the worker here are two
+# containers on the *same* host sharing a Docker volume — so, unlike
+# Render's separate-services-separate-filesystems setup, STORAGE_BACKEND=local
+# works correctly here: both containers see the same files. See
+# ORACLE_RUNBOOK.md for the full go-live walkthrough (VM setup, DNS, TLS).
+#
+# Usage:
+#   cp .env.example .env   # then edit it — see ORACLE_RUNBOOK.md step 4
+#   docker compose up -d --build
+#   docker compose logs -f api
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: recon
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-recon}
+      POSTGRES_DB: recon
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recon"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Overrides whatever's in .env for these two — they must point at the
+      # Compose service names, not localhost, from inside a container.
+      DATABASE_URL: postgresql+psycopg2://recon:${POSTGRES_PASSWORD:-recon}@db:5432/recon
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_DIR: /data/storage
+    volumes:
+      - document_storage:/data/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Runs migrations, then starts the API — the self-hosted equivalent of
+    # render.yaml's preDeployCommand + startCommand for the web service.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    expose:
+      - "8000"
+
+  worker:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://recon:${POSTGRES_PASSWORD:-recon}@db:5432/recon
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_DIR: /data/storage
+    volumes:
+      - document_storage:/data/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    command: python -m app.worker
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  db_data:
+  redis_data:
+  document_storage:
+  caddy_data:
+  caddy_config:

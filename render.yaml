@@ -1,0 +1,119 @@
+# Render Blueprint for Recon's backend.
+#
+# Deploy: push this repo to GitHub, then in the Render dashboard choose
+# "New +" -> "Blueprint" and point it at the repo/branch. Render reads this
+# file and provisions everything below — a Postgres database, a Redis-
+# compatible Key Value store, the API, and the background worker — in one
+# pass. See RUNBOOK.md for the full walkthrough, including exactly which
+# secrets you'll be prompted to fill in during that flow (anything marked
+# `sync: false` below).
+#
+# IMPORTANT: STORAGE_BACKEND is set to "s3" here, not "local". The API and
+# the worker run as two separate Render services with two separate
+# filesystems — local disk storage would mean the worker can't read files
+# the API just saved (or vice versa), which breaks document processing
+# outright. This is a hard requirement of this topology, not a nice-to-have:
+# have an S3 (or S3-compatible) bucket ready before you deploy. See RUNBOOK.md
+# step 2 for the two-minute bucket setup if you don't have one yet.
+
+databases:
+  - name: recon-db
+    plan: basic-256mb
+    databaseName: recon
+    user: recon
+    region: oregon
+
+envVarGroups:
+  - name: recon-shared
+    envVars:
+      - key: ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      # Pins the Python version Render builds with, matching what this was
+      # developed/tested against. Bump deliberately, not by accident.
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: BACKGROUND_JOBS_ENABLED
+        value: "true"
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      # AI_PROVIDER defaults to "gemini" (see app/ai/matching.py) — GEMINI_API_KEY
+      # is the one that actually needs to be real. Flip AI_PROVIDER to
+      # "anthropic" below and fill in ANTHROPIC_API_KEY instead if you'd
+      # rather use Claude.
+      - key: AI_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: STORAGE_BACKEND
+        value: s3
+      - key: S3_BUCKET_NAME
+        sync: false
+      - key: S3_REGION
+        value: us-east-1
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: INBOUND_EMAIL_DOMAIN
+        sync: false
+      - key: INBOUND_EMAIL_WEBHOOK_USERNAME
+        sync: false
+      - key: INBOUND_EMAIL_WEBHOOK_PASSWORD
+        sync: false
+      - key: MAILGUN_SIGNING_KEY
+        sync: false
+      # Set to your deployed frontend's exact origin once it exists (e.g.
+      # https://recon.vercel.app) -- see RUNBOOK.md step 4. Left blank
+      # (refusing all cross-origin requests) is the safe default until then.
+      - key: CORS_ORIGINS
+        sync: false
+
+services:
+  - type: keyvalue
+    name: recon-redis
+    plan: starter
+    ipAllowList: [] # empty = only reachable from other services in this workspace, not the public internet
+
+  - type: web
+    name: recon-api
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - fromGroup: recon-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: recon-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: recon-redis
+          type: keyvalue
+          property: connectionString
+
+  - type: worker
+    name: recon-worker
+    runtime: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.worker
+    envVars:
+      - fromGroup: recon-shared
+      - key: DATABASE_URL
+        fromDatabase:
+          name: recon-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: recon-redis
+          type: keyvalue
+          property: connectionString

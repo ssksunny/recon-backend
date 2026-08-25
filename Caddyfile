@@ -1,0 +1,10 @@
+# Caddy automatically gets and renews a Let's Encrypt TLS certificate for
+# whatever domain you put here — no certbot, no manual renewal cron job.
+# Replace the placeholder with your real domain before starting the stack
+# (see ORACLE_RUNBOOK.md step 5) — Let's Encrypt needs a real domain that
+# already resolves to this VM's public IP; it will not issue a certificate
+# for a bare IP address.
+
+api.your-domain.com {
+	reverse_proxy api:8000
+}
