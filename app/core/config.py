@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     # --- CORS ---
     cors_origins: str = "http://localhost:3000"
 
+    # --- Broker portal ---
+    # Base URL of the separate broker-facing frontend (recon-broker-portal),
+    # not the admin/reviewer recon-frontend app above. Used only to build
+    # the invite_url returned by POST /carriers/{id}/invite — the actual
+    # link an admin copies and sends a broker. Must also be added to
+    # CORS_ORIGINS once deployed, same as recon-frontend's URL was.
+    broker_portal_url: str = "http://localhost:3001"
+
     # --- Database ---
     database_url: str = Field(
         default="postgresql+psycopg2://recon:recon@localhost:5432/recon"
