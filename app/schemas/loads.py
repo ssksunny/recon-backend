@@ -35,6 +35,12 @@ class LoadListItem(BaseModel):
     id: uuid.UUID
     load_number: str
     carrier_name: str
+    # The Carrier this load is assigned to for broker-portal access, or
+    # None if unassigned (invisible to every carrier until an admin sets
+    # this — see app/services/carrier_service.py:assign_carrier_to_load).
+    # Deliberately a separate field from carrier_name above, which is just
+    # extracted text and is never used to infer this.
+    carrier_id: uuid.UUID | None
     status: LoadStatus
     match_status: str  # "clean" | "discrepancy" | "needs_info" | "no_data"
     linehaul_rate: Decimal | None
