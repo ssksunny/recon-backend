@@ -95,6 +95,7 @@ class ReviewAction(str, enum.Enum):
 class AuditActorType(str, enum.Enum):
     SYSTEM = "system"
     USER = "user"
+    CARRIER = "carrier"
 
 
 # --------------------------------------------------------------------------
@@ -192,6 +193,18 @@ class Load(UUIDPkMixin, TimestampMixin, TenantMixin, Base):
     load_number: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     carrier_name: Mapped[str] = mapped_column(String(255), nullable=False)
 
+    # The carrier's own login to the broker portal, if any. Deliberately
+    # separate from carrier_name above and NEVER auto-populated from it —
+    # carrier_name is free-text extracted by Claude from a rate
+    # confirmation and two real carriers can share a near-identical name,
+    # so linking a load to a Carrier account is always an explicit admin
+    # action (see app/services/carrier_service.py:assign_carrier_to_load).
+    # Nullable and SET NULL on delete: an unassigned load is simply
+    # invisible to every carrier, not an error state.
+    carrier_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("carriers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
     origin: Mapped[str | None] = mapped_column(String(255), nullable=True)
     destination: Mapped[str | None] = mapped_column(String(255), nullable=True)
     equipment_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -214,6 +227,7 @@ class Load(UUIDPkMixin, TimestampMixin, TenantMixin, Base):
     documents: Mapped[list["Document"]] = relationship(back_populates="load")
     line_items: Mapped[list["LineItem"]] = relationship(back_populates="load", cascade="all, delete-orphan")
     reviews: Mapped[list["Review"]] = relationship(back_populates="load")
+    carrier: Mapped["Carrier | None"] = relationship(back_populates="loads")
 
     def __repr__(self) -> str:
         return f"<Load {self.load_number} ({self.status.value})>"
@@ -354,3 +368,73 @@ class AuditLog(UUIDPkMixin, TenantMixin, Base):
 
     def __repr__(self) -> str:
         return f"<AuditLog {self.event_type} on {self.entity_type}:{self.entity_id}>"
+
+
+# --------------------------------------------------------------------------
+# Carrier / CarrierUser (broker self-service portal)
+# --------------------------------------------------------------------------
+
+class Carrier(UUIDPkMixin, TimestampMixin, TenantMixin, Base):
+    """
+    An external carrier company an admin has chosen to give portal access
+    to. Scoped by company_id like every other tenant table — two brokerages
+    using Recon never share a Carrier row even if the real-world carrier is
+    the same company.
+
+    Deliberately NOT linked automatically to Load.carrier_name (the
+    free-text string Claude extracts from a rate confirmation) — see the
+    comment on Load.carrier_id for why. A Carrier only gains visibility
+    into a Load through an explicit admin assignment.
+    """
+    __tablename__ = "carriers"
+    __table_args__ = (
+        UniqueConstraint("company_id", "name", name="uq_carriers_company_name"),
+    )
+
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    company: Mapped["Company"] = relationship()
+    users: Mapped[list["CarrierUser"]] = relationship(back_populates="carrier", cascade="all, delete-orphan")
+    loads: Mapped[list["Load"]] = relationship(back_populates="carrier")
+
+    def __repr__(self) -> str:
+        return f"<Carrier {self.name}>"
+
+
+class CarrierUser(UUIDPkMixin, TimestampMixin, Base):
+    """
+    A broker's own login to the broker portal — a second, parallel
+    principal type alongside User, not a User with a different role. Kept
+    fully separate on purpose: a broker's JWT carries carrier_id (never
+    company_id-as-tenant-scope the way a User's does) and role="broker",
+    "typ"="broker", so app.api.deps.get_current_broker_user can't be
+    confused with get_current_user even in a hypothetical uuid collision
+    between the users and carrier_users tables.
+
+    Not a TenantMixin table — a CarrierUser belongs to a Carrier, and a
+    Carrier already carries company_id, so this reaches its company via
+    carrier.company_id rather than duplicating the column.
+
+    hashed_password is nullable because the row is created the moment an
+    admin sends an invite (see carrier_service.invite_carrier_user), before
+    the broker has ever set a password; is_active flips true only once
+    carrier_service.accept_invite runs.
+    """
+    __tablename__ = "carrier_users"
+    __table_args__ = (
+        UniqueConstraint("carrier_id", "email", name="uq_carrier_users_carrier_email"),
+    )
+
+    carrier_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("carriers.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    carrier: Mapped["Carrier"] = relationship(back_populates="users")
+
+    def __repr__(self) -> str:
+        return f"<CarrierUser {self.email}>"
