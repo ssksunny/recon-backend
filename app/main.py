@@ -63,6 +63,9 @@ def _handle_processing_error(request: Request, exc: ProcessingError) -> JSONResp
 
 # --- Routers ---
 from app.api.auth import router as auth_router
+from app.api.broker import router as broker_router
+from app.api.broker_auth import router as broker_auth_router
+from app.api.carriers import router as carriers_router
 from app.api.company import router as company_router
 from app.api.documents import router as documents_router
 from app.api.email import router as email_router
@@ -75,3 +78,8 @@ app.include_router(loads_router, prefix=f"{settings.api_v1_prefix}/loads", tags=
 app.include_router(documents_router, prefix=f"{settings.api_v1_prefix}/documents", tags=["documents"])
 app.include_router(reviews_router, prefix=f"{settings.api_v1_prefix}/reviews", tags=["reviews"])
 app.include_router(email_router, prefix=f"{settings.api_v1_prefix}/email", tags=["email"])
+app.include_router(carriers_router, prefix=f"{settings.api_v1_prefix}/carriers", tags=["carriers"])
+
+# --- Broker portal (separate frontend, separate auth — see app/api/deps.py) ---
+app.include_router(broker_auth_router, prefix=f"{settings.api_v1_prefix}/broker/auth", tags=["broker"])
+app.include_router(broker_router, prefix=f"{settings.api_v1_prefix}/broker", tags=["broker"])
