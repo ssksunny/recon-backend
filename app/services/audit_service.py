@@ -111,9 +111,43 @@ def list_audit_log_for_load(db: Session, company_id: uuid.UUID, load_id: uuid.UU
             entity_id=e.entity_id,
             event_type=e.event_type,
             actor_type=e.actor_type,
-            actor_name=names.get(e.actor_id) if e.actor_id is not None else None,
+            actor_name=_resolve_actor_name(e, names),
             details=e.details,
             created_at=e.created_at,
         )
         for e in entries
     ]
+
+
+def list_audit_log_for_load_broker_view(
+    db: Session, company_id: uuid.UUID, load_id: uuid.UUID
+) -> list[AuditLogEntry]:
+    """
+    Same merged timeline as list_audit_log_for_load, minus internal review
+    deliberation (a reviewer's approve/dispute/override notes) — the broker
+    portal scoping decision was "status + reason, their own documents, and
+    the ability to respond", not visibility into how an internal reviewer
+    reasoned about a decision. Everything else (document received,
+    extraction, the AI match decision and its reasoning, and the broker's
+    own past responses) is exactly what a broker needs to see to know
+    what's flagged and why.
+    """
+    internal_only_events = {"review_action", "override"}
+    entries = list_audit_log_for_load(db, company_id, load_id)
+    return [e for e in entries if e.event_type not in internal_only_events]
+
+
+def _resolve_actor_name(entry: AuditLog, user_names: dict[uuid.UUID, str]) -> str | None:
+    """
+    A User actor's name comes from the users table (actor_id is a real FK).
+    A Carrier actor has no actor_id to look up — audit_logs.actor_id is
+    FK'd only to users.id, and a broker acting isn't a User — so
+    carrier-originated rows (see app/services/carrier_service.py) instead
+    bake the broker's name into `details` at write-time, and this is where
+    that gets read back out for display.
+    """
+    if entry.actor_id is not None:
+        return user_names.get(entry.actor_id)
+    if entry.actor_type == AuditActorType.CARRIER:
+        return entry.details.get("carrier_user_name")
+    return None
