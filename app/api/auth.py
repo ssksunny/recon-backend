@@ -59,7 +59,9 @@ def register_company(payload: CompanyRegisterRequest, db: Session = Depends(get_
 
     db.commit()
 
-    token = create_access_token({"sub": str(admin_user.id), "company_id": str(company.id), "role": admin_user.role.value})
+    token = create_access_token(
+        {"sub": str(admin_user.id), "company_id": str(company.id), "role": admin_user.role.value, "typ": "user"}
+    )
     return TokenResponse(access_token=token)
 
 
@@ -90,7 +92,9 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     if not user.company.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="This company's account is inactive.")
 
-    token = create_access_token({"sub": str(user.id), "company_id": str(user.company_id), "role": user.role.value})
+    token = create_access_token(
+        {"sub": str(user.id), "company_id": str(user.company_id), "role": user.role.value, "typ": "user"}
+    )
     return TokenResponse(access_token=token)
 
 
