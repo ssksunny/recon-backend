@@ -128,6 +128,11 @@ def _latest_match_result(db: Session, company_id: uuid.UUID, load_id: uuid.UUID)
     return entry.details if entry is not None else None
 
 
+def get_latest_match_result(db: Session, company_id: uuid.UUID, load_id: uuid.UUID) -> dict[str, Any] | None:
+    """Public entry point for _latest_match_result — also used by carrier_service's broker-scoped load detail."""
+    return _latest_match_result(db, company_id, load_id)
+
+
 def get_load_detail(db: Session, company_id: uuid.UUID, load_id: uuid.UUID) -> LoadDetail:
     load = get_load(db, company_id, load_id)
     documents = (
