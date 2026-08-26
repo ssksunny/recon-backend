@@ -13,14 +13,15 @@ import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_admin, get_current_user
 from app.models.database import get_db
 from app.models.models import Load, User
 from app.schemas.audit import AuditLogEntryOut
+from app.schemas.broker import AssignCarrierRequest
 from app.schemas.documents import DocumentOut, MatchResultOut
 from app.schemas.loads import LineItemOut, LoadDetail, LoadListItem
 from app.schemas.reviews import ReviewOut
-from app.services import audit_service, load_service
+from app.services import audit_service, carrier_service, load_service
 
 router = APIRouter()
 
@@ -30,6 +31,7 @@ def _to_list_item(load: Load, match_status: str) -> LoadListItem:
         id=load.id,
         load_number=load.load_number,
         carrier_name=load.carrier_name,
+        carrier_id=load.carrier_id,
         status=load.status,
         match_status=match_status,
         linehaul_rate=load.linehaul_rate,
@@ -72,6 +74,7 @@ def get_load(
         id=load.id,
         load_number=load.load_number,
         carrier_name=load.carrier_name,
+        carrier_id=load.carrier_id,
         status=load.status,
         match_status=detail.match_status,
         linehaul_rate=load.linehaul_rate,
@@ -100,3 +103,21 @@ def get_load_audit_trail(
     load_service.get_load(db, current_user.company_id, load_id)  # 404s if it's not this company's load
     entries = audit_service.list_audit_log_for_load(db, current_user.company_id, load_id)
     return [AuditLogEntryOut.model_validate(e) for e in entries]
+
+
+@router.post("/{load_id}/assign-carrier", response_model=LoadListItem)
+def assign_carrier(
+    load_id: uuid.UUID,
+    payload: AssignCarrierRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
+) -> LoadListItem:
+    """Grants (or revokes, with carrier_id=None) a carrier's broker-portal access to this load."""
+    load = carrier_service.assign_carrier_to_load(
+        db,
+        company_id=current_user.company_id,
+        load_id=load_id,
+        carrier_id=payload.carrier_id,
+        actor_user_id=current_user.id,
+    )
+    return _to_list_item(load, load_service.compute_load_match_status(db, load.id))
