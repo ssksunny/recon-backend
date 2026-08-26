@@ -55,6 +55,7 @@ def receive_document(
     file_bytes: bytes,
     source: DocumentSource = DocumentSource.UPLOAD,
     extra_audit_details: dict[str, Any] | None = None,
+    actor_type_override: AuditActorType | None = None,
 ) -> DocumentReceiveResult:
     """
     Validates and stores one document, creates its row, and queues
@@ -67,6 +68,14 @@ def receive_document(
     and source=DocumentSource.EMAIL; extra_audit_details is its way of
     recording who the email was from without adding email-specific columns
     to the audit log itself.
+
+    A broker portal upload (app/api/broker.py) also passes actor_user_id=None
+    — a CarrierUser isn't a User, so there's no users.id to record — but
+    unlike an inbound email it does have a real human on the other end, so
+    it passes actor_type_override=AuditActorType.CARRIER (with the broker's
+    identity recorded in extra_audit_details instead, the same pattern
+    email_service uses for from_email) rather than falling through to the
+    actor_user_id-is-None-means-SYSTEM default below.
 
     Raises:
         ValidationError: unsupported file type, or an empty file.
@@ -112,7 +121,7 @@ def receive_document(
         entity_type="document",
         entity_id=document.id,
         event_type="document_received",
-        actor_type=AuditActorType.USER if actor_user_id is not None else AuditActorType.SYSTEM,
+        actor_type=actor_type_override or (AuditActorType.USER if actor_user_id is not None else AuditActorType.SYSTEM),
         actor_id=actor_user_id,
         details=audit_details,
     )
@@ -135,6 +144,26 @@ def get_document(db: Session, company_id: uuid.UUID, document_id: uuid.UUID) -> 
     document = (
         db.query(Document)
         .filter(Document.company_id == company_id, Document.id == document_id)
+        .one_or_none()
+    )
+    if document is None:
+        raise NotFoundError("Document not found.")
+    return document
+
+
+def get_document_for_carrier(db: Session, carrier_id: uuid.UUID, document_id: uuid.UUID) -> Document:
+    """
+    The broker-portal equivalent of get_document — scoped by carrier_id
+    (via the document's load) instead of company_id. A broker can only ever
+    reach a document that belongs to a load an admin explicitly assigned to
+    their carrier (see app/services/carrier_service.py:assign_carrier_to_load);
+    a document with no load, or whose load belongs to a different carrier,
+    is invisible here exactly as if it didn't exist.
+    """
+    document = (
+        db.query(Document)
+        .join(Load, Document.load_id == Load.id)
+        .filter(Load.carrier_id == carrier_id, Document.id == document_id)
         .one_or_none()
     )
     if document is None:
